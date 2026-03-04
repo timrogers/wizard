@@ -21,6 +21,7 @@ describe('CLI argument parsing', () => {
 
     // Reset environment
     process.env = { ...originalEnv };
+    delete process.env.POSTHOG_WIZARD_REGION;
     delete process.env.POSTHOG_WIZARD_DEFAULT;
     delete process.env.POSTHOG_WIZARD_CI;
     delete process.env.POSTHOG_WIZARD_API_KEY;
@@ -82,7 +83,35 @@ describe('CLI argument parsing', () => {
     });
   });
 
+  describe('--region flag', () => {
+    test('is undefined when not specified', async () => {
+      await runCLI([]);
+
+      const args = getLastCallArgs(mockRunWizard);
+      expect(args.region).toBeUndefined();
+    });
+
+    test.each(['us', 'eu'])(
+      'accepts "%s" as a valid region',
+      async (region) => {
+        await runCLI(['--region', region]);
+
+        const args = getLastCallArgs(mockRunWizard);
+        expect(args.region).toBe(region);
+      },
+    );
+  });
+
   describe('environment variables', () => {
+    test('respects POSTHOG_WIZARD_REGION', async () => {
+      process.env.POSTHOG_WIZARD_REGION = 'eu';
+
+      await runCLI([]);
+
+      const args = getLastCallArgs(mockRunWizard);
+      expect(args.region).toBe('eu');
+    });
+
     test('respects POSTHOG_WIZARD_DEFAULT', async () => {
       process.env.POSTHOG_WIZARD_DEFAULT = 'false';
 
@@ -93,12 +122,21 @@ describe('CLI argument parsing', () => {
     });
 
     test('CLI args override environment variables', async () => {
+      process.env.POSTHOG_WIZARD_REGION = 'us';
       process.env.POSTHOG_WIZARD_DEFAULT = 'false';
 
-      await runCLI(['--default']);
+      await runCLI(['--region', 'eu', '--default']);
 
       const args = getLastCallArgs(mockRunWizard);
+      expect(args.region).toBe('eu');
       expect(args.default).toBe(true);
+    });
+
+    test('region is undefined when no env var or CLI arg', async () => {
+      await runCLI([]);
+
+      const args = getLastCallArgs(mockRunWizard);
+      expect(args.region).toBeUndefined();
     });
   });
 
@@ -125,14 +163,23 @@ describe('CLI argument parsing', () => {
 
       // New defaults
       expect(args.default).toBe(true);
+      expect(args.region).toBeUndefined();
     });
   });
 
   describe('mcp commands', () => {
-    test('mcp add calls runMCPInstall', async () => {
+    test('mcp add region is undefined when not specified', async () => {
       await runCLI(['mcp', 'add']);
 
-      expect(mockRunMCPInstall).toHaveBeenCalled();
+      const args = getLastCallArgs(mockRunMCPInstall);
+      expect(args.region).toBeUndefined();
+    });
+
+    test('mcp add respects --region flag', async () => {
+      await runCLI(['mcp', 'add', '--region', 'eu']);
+
+      const args = getLastCallArgs(mockRunMCPInstall);
+      expect(args.region).toBe('eu');
     });
 
     test('mcp commands inherit global flags', async () => {
@@ -155,6 +202,8 @@ describe('CLI argument parsing', () => {
     test('can be set to true', async () => {
       await runCLI([
         '--ci',
+        '--region',
+        'us',
         '--api-key',
         'phx_test',
         '--install-dir',
@@ -165,14 +214,26 @@ describe('CLI argument parsing', () => {
       expect(args.ci).toBe(true);
     });
 
+    test('requires --region when --ci is set', async () => {
+      await runCLI([
+        '--ci',
+        '--api-key',
+        'phx_test',
+        '--install-dir',
+        '/tmp/test',
+      ]);
+
+      expect(process.exit).toHaveBeenCalledWith(1);
+    });
+
     test('requires --api-key when --ci is set', async () => {
-      await runCLI(['--ci', '--install-dir', '/tmp/test']);
+      await runCLI(['--ci', '--region', 'us', '--install-dir', '/tmp/test']);
 
       expect(process.exit).toHaveBeenCalledWith(1);
     });
 
     test('requires --install-dir when --ci is set', async () => {
-      await runCLI(['--ci', '--api-key', 'phx_test']);
+      await runCLI(['--ci', '--region', 'us', '--api-key', 'phx_test']);
 
       expect(process.exit).toHaveBeenCalledWith(1);
     });
@@ -180,6 +241,8 @@ describe('CLI argument parsing', () => {
     test('passes --api-key to runWizard', async () => {
       await runCLI([
         '--ci',
+        '--region',
+        'us',
         '--api-key',
         'phx_test_key',
         '--install-dir',
@@ -194,6 +257,7 @@ describe('CLI argument parsing', () => {
   describe('CI environment variables', () => {
     test('respects POSTHOG_WIZARD_CI', async () => {
       process.env.POSTHOG_WIZARD_CI = 'true';
+      process.env.POSTHOG_WIZARD_REGION = 'us';
       process.env.POSTHOG_WIZARD_API_KEY = 'phx_env_key';
       process.env.POSTHOG_WIZARD_INSTALL_DIR = '/tmp/test';
 
@@ -205,6 +269,7 @@ describe('CLI argument parsing', () => {
 
     test('respects POSTHOG_WIZARD_API_KEY', async () => {
       process.env.POSTHOG_WIZARD_CI = 'true';
+      process.env.POSTHOG_WIZARD_REGION = 'eu';
       process.env.POSTHOG_WIZARD_API_KEY = 'phx_env_key';
       process.env.POSTHOG_WIZARD_INSTALL_DIR = '/tmp/test';
 
@@ -216,10 +281,13 @@ describe('CLI argument parsing', () => {
 
     test('CLI args override CI environment variables', async () => {
       process.env.POSTHOG_WIZARD_CI = 'true';
+      process.env.POSTHOG_WIZARD_REGION = 'us';
       process.env.POSTHOG_WIZARD_API_KEY = 'phx_env_key';
       process.env.POSTHOG_WIZARD_INSTALL_DIR = '/tmp/test';
 
       await runCLI([
+        '--region',
+        'eu',
         '--api-key',
         'phx_cli_key',
         '--install-dir',
@@ -227,6 +295,7 @@ describe('CLI argument parsing', () => {
       ]);
 
       const args = getLastCallArgs(mockRunWizard);
+      expect(args.region).toBe('eu');
       expect(args.apiKey).toBe('phx_cli_key');
     });
   });

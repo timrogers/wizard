@@ -14,6 +14,7 @@ import {
   getPackageDotJson,
   isUsingTypeScript,
   printWelcome,
+  askForCloudRegion,
 } from '../utils/clack-utils';
 import type { PackageDotJson } from '../utils/package-json';
 import { analytics } from '../utils/analytics';
@@ -57,6 +58,12 @@ export async function runAgentWizard(
       if (coerced && semver.lt(coerced, config.detection.minimumVersion)) {
         const docsUrl =
           config.metadata.unsupportedVersionDocsUrl ?? config.metadata.docsUrl;
+        analytics.capture(WIZARD_INTERACTION_EVENT_NAME, {
+          action: 'wizard_version_check_failed',
+          integration: config.metadata.integration,
+          detected_version: version,
+          minimum_version: config.detection.minimumVersion,
+        });
         clack.log.warn(
           `Sorry: the wizard can't help you with ${config.metadata.name} ${version}. Upgrade to ${config.metadata.name} ${config.detection.minimumVersion} or later, or check out the manual setup guide.`,
         );
@@ -92,6 +99,10 @@ export async function runAgentWizard(
 
   const aiConsent = await askForAIConsent(options);
   if (!aiConsent) {
+    analytics.capture(WIZARD_INTERACTION_EVENT_NAME, {
+      action: 'wizard_ai_consent_declined',
+      integration: config.metadata.integration,
+    });
     await abort(
       `This wizard uses an LLM agent to intelligently modify your project. Please view the docs to set up ${config.metadata.name} manually instead: ${config.metadata.docsUrl}`,
       0,
@@ -101,12 +112,17 @@ export async function runAgentWizard(
   // Check Anthropic/Claude service status before proceeding
   const statusOk = await checkAnthropicStatusWithPrompt({ ci: options.ci });
   if (!statusOk) {
+    analytics.capture(WIZARD_INTERACTION_EVENT_NAME, {
+      action: 'wizard_anthropic_status_degraded',
+      integration: config.metadata.integration,
+    });
     await abort(
       `Please try again later, or set up ${config.metadata.name} manually: ${config.metadata.docsUrl}`,
       0,
     );
   }
 
+  const cloudRegion = options.cloudRegion ?? (await askForCloudRegion());
   const typeScriptDetected = isUsingTypeScript(options);
 
   await confirmContinueIfNoOrDirtyGitRepo(options);
@@ -142,8 +158,11 @@ export async function runAgentWizard(
   });
 
   // Get PostHog credentials
-  const { projectApiKey, host, accessToken, projectId, cloudRegion } =
-    await getOrAskForProjectData(options);
+  const { projectApiKey, host, accessToken, projectId } =
+    await getOrAskForProjectData({
+      ...options,
+      cloudRegion,
+    });
 
   // Gather framework-specific context (e.g., Next.js router, React Native platform)
   const frameworkContext = config.metadata.gatherContext
@@ -180,7 +199,10 @@ export async function runAgentWizard(
   // See: https://github.com/anthropics/claude-code/issues/2267
   const mcpUrl = options.localMcp
     ? 'http://localhost:8787/mcp'
-    : process.env.MCP_URL || 'https://mcp.posthog.com/mcp';
+    : process.env.MCP_URL ||
+      (cloudRegion === 'eu'
+        ? 'https://mcp-eu.posthog.com/mcp'
+        : 'https://mcp.posthog.com/mcp');
 
   const agent = await initializeAgent(
     {
@@ -304,10 +326,19 @@ Please report this error to: ${chalk.cyan('wizard@posthog.com')}`;
       integration: config.metadata.integration,
       options,
     });
+    if (uploadedEnvVars.length > 0) {
+      analytics.capture(WIZARD_INTERACTION_EVENT_NAME, {
+        action: 'wizard_env_vars_uploaded',
+        integration: config.metadata.integration,
+        variable_count: uploadedEnvVars.length,
+        variable_keys: uploadedEnvVars,
+      });
+    }
   }
 
   // Add MCP server to clients
   await addMCPServerToClientsStep({
+    cloudRegion,
     integration: config.metadata.integration,
     ci: options.ci,
   });

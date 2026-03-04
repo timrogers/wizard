@@ -1,8 +1,8 @@
 import { abortIfCancelled } from './utils/clack-utils';
 
-import type { WizardOptions } from './utils/types';
+import type { CloudRegion, WizardOptions } from './utils/types';
 
-import { Integration } from './lib/constants';
+import { Integration, WIZARD_INTERACTION_EVENT_NAME } from './lib/constants';
 import { readEnvironment } from './utils/environment';
 import clack from './utils/clack';
 import path from 'path';
@@ -20,6 +20,7 @@ type Args = {
   debug?: boolean;
   forceInstall?: boolean;
   installDir?: string;
+  region?: CloudRegion;
   default?: boolean;
   signup?: boolean;
   localMcp?: boolean;
@@ -57,6 +58,7 @@ export async function runWizard(argv: Args) {
     debug: finalArgs.debug ?? false,
     forceInstall: finalArgs.forceInstall ?? false,
     installDir: resolvedInstallDir,
+    cloudRegion: finalArgs.region ?? undefined,
     default: finalArgs.default ?? false,
     signup: finalArgs.signup ?? false,
     localMcp: finalArgs.localMcp ?? false,
@@ -149,9 +151,17 @@ async function getIntegrationForSetup(
       clack.log.success(
         `Detected integration: ${FRAMEWORK_REGISTRY[detectedIntegration].metadata.name}`,
       );
+      analytics.capture(WIZARD_INTERACTION_EVENT_NAME, {
+        action: 'wizard_framework_detected',
+        integration: detectedIntegration,
+        framework_name: FRAMEWORK_REGISTRY[detectedIntegration].metadata.name,
+      });
       return detectedIntegration;
     }
 
+    analytics.capture(WIZARD_INTERACTION_EVENT_NAME, {
+      action: 'wizard_framework_detection_failed',
+    });
     clack.log.info(
       "I couldn't detect your framework. Please choose one to get started.",
     );
